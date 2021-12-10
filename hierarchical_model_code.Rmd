@@ -1,0 +1,412 @@
+---
+title: "Hierarchical model"
+author: "Moses Glickman"
+date: "11/21/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Adding in population baskets
+```{r, echo=T}
+hier <- read.csv("hierarchical_df.csv")
+hier$basket <- 1 + (hier$Population >=10000) +
+  (hier$Population >=75000) +
+  (hier$Population >= 250000) +
+  (hier$Population >= 1000000)
+hier$basket <- as.factor(hier$basket)
+hier$Cases_Per_K <- 1000*hier$Cases/hier$Population
+```
+
+### Hierarchical modeling
+```{r, echo=T}
+#Gibbs sampler
+library(dplyr)
+basket1 <- dplyr::filter(hier, basket==1)$Cases_Per_K
+basket2 <- dplyr::filter(hier, basket==2)$Cases_Per_K
+basket3 <- dplyr::filter(hier, basket==3)$Cases_Per_K
+basket4 <- dplyr::filter(hier, basket==4)$Cases_Per_K
+basket5 <- dplyr::filter(hier, basket==5)$Cases_Per_K
+mu0 <- mean(hier$Cases_Per_K)
+gamma2_0 <- 20
+tau2_0 <- 750
+nu_0 <- 2
+sigma2_0 <- var(hier$Cases_Per_K)
+v_0 <- 2
+m <- 5
+#matrix with mu, tau, sigma vals
+
+
+mts <- matrix(0,100000,3)
+#matrix with theta vals
+theta <- matrix(0,100000,5)
+datalist <- list(basket1, basket2,
+                 basket3, basket4, basket5)
+ybar <- rep(0,5)
+n_vec <- rep(0,5)
+for(i in 1:5){
+  ybar[i] <- mean(datalist[[i]])
+  n_vec[i] <- length(datalist[[i]])
+}
+n_ov <- length(hier$Cases_Per_K)
+#couldn't think of a good descriptive name 
+#not already in use for a built in capability
+#therefore carp
+carp<- function(vec1, thetval){
+  return(sum((vec1-thetval)^2))
+}
+theta[1,] <- ybar
+mts[1,] <- c(mu0,tau2_0, sigma2_0)
+for(i in 2:100000){
+  for(j in 1:5){
+    theta[i,j] <- rnorm(1,
+                        ((n_vec[j]*ybar[j]/mts[i-1,3])
+                         +(1/mts[i-1,2]))/
+                          ((n_vec[j]/mts[i-1,3])+ 
+                             (1/mts[i-1,2])),
+                        sqrt(1/((n_vec[j]/mts[i-1,3])+(1/mts[i-1,2]))))
+  }
+  mts[i,1] <- rnorm(1,
+                    ((m*mean(theta[i-1,])/mts[i-1,2]) + mu0/gamma2_0)/
+                      ((m/mts[i-1,2])+ (1/gamma2_0)),
+                    sqrt(1/(
+                      (m/mts[i-1,2]) + (1/gamma2_0))))
+  mts[i,2] <- 1/rgamma(1,
+                       (nu_0 + m)/2,
+                       rate=0.5*(nu_0*tau2_0 + carp(theta[i-1,],mts[i-1,1]))
+                        )
+  carpsum <- 0
+  for(k in 1:5){
+    carpsum = carpsum + carp(datalist[[k]],theta[i-1,k])
+  }
+  mts[i,3] <- 1/rgamma(1,
+                       0.5*(v_0 + n_ov),
+                       rate = 0.5*(v_0*sigma2_0 + carpsum))
+}
+
+plot(mts[,1],type="l",main="All-County Mean Estimates", ylab=NA)
+plot(mts[,2],type="l",main="Tau2 Estimates",ylab=NA)
+plot(mts[,3],type="l",main="Sigma2 Estimates",ylab=NA)
+plot(theta[,1],type="l",main="Basket 1 Mean Estimates",ylab=NA)
+plot(theta[,2],type="l",main="Basket 2 Mean Estimates",ylab=NA)
+plot(theta[,3],type="l",main="Basket 3 Mean Estimates",ylab=NA)
+plot(theta[,4],type="l",main="Basket 4 Mean Estimates",ylab=NA)
+plot(theta[,5],type="l",main="Basket 5 Mean Estimates",ylab=NA)
+
+
+library(coda)
+effectiveSize(mts[,1])
+effectiveSize(mts[,2])
+effectiveSize(mts[,3])
+
+#Mean estimate
+mean(mts[30000:100000,1 ])
+#Tau estimate
+mean(mts[30000:100000,2 ])
+#Sigma estimate
+mean(mts[30000:100000,3 ])
+
+mean(theta[30000:100000, 1])
+mean(theta[30000:100000, 2])
+mean(theta[30000:100000, 3])
+mean(theta[30000:100000, 4])
+mean(theta[30000:100000, 5])
+
+theta_1 <- theta[30000:100000, 1]
+theta_2 <- theta[30000:100000, 2]
+theta_3 <- theta[30000:100000, 3]
+theta_4 <- theta[30000:100000, 4]
+theta_5 <- theta[30000:100000, 5]
+mean(theta_2 < theta_5)
+
+boxplot(theta_1, theta_2, theta_3, theta_4, theta_5, names=c("<10K", "<75K", "<250K", "<1M", ">1M"), xlab="Population Basket", ylab="Case Count Per 1000", main="Per Capita Case Counts By Population Basket")
+
+
+
+basket1_tot <- filter(hier, basket==1)
+basket2_tot <- filter(hier, basket==2)
+basket3_tot <- filter(hier, basket==3)
+basket4_tot <- filter(hier, basket==4)
+basket5_tot <- filter(hier, basket==5)
+
+as.vector(summary(hier$basket))
+num_bar <- barplot(as.vector(summary(hier$basket)), names=c("<10K", "<75K", "<250K", "<1M", ">1M"), main="Number of Counties By Basket", col="light green")
+text(num_bar,0,round(as.vector(summary(hier$basket)),1),cex=1,pos=3)
+
+sumvec <- c(sum(basket1_tot$Population),
+sum(basket2_tot$Population),
+sum(basket3_tot$Population),
+sum(basket4_tot$Population),
+sum(basket5_tot$Population))
+a_bar <- barplot(sumvec, names=c("<10K", "<75K", "<250K", "<1M", ">1M"), main="Total Population By Basket", col="light blue")
+text(a_bar,0,c("3.7M","49.2M","59.4M","111.8M","86.2M"),cex=1,pos=3)
+
+sumvec2 <- c(sum(basket1_tot$Cases),
+sum(basket2_tot$Cases),
+sum(basket3_tot$Cases),
+sum(basket4_tot$Cases),
+sum(basket5_tot$Cases))
+b_bar <- barplot(sumvec2, names=c("<10K", "<75K", "<250K", "<1M", ">1M"), main="Total Caseload By Basket", col="pink")
+text(b_bar,0,c("560K","7.5M","8.5M","14.9M","11.7M"),cex=1,pos=3)
+hist(basket1_tot$Cases_Per_K, xlab="Cases Per 1000", main="Cases/K Among Counties With Pop<10K", col="wheat")
+hist(basket2_tot$Cases_Per_K, xlab="Cases Per 1000", main="Cases/K Among Counties With Pop>10K,<75K", col="tomato")
+hist(basket3_tot$Cases_Per_K, xlab="Cases Per 1000", main="Cases/K Among Counties With Pop>75K,<250K", col="thistle")
+hist(basket4_tot$Cases_Per_K, xlab="Cases Per 1000", main="Cases/K Among Counties With Pop>250K,<1M", col="skyblue")
+hist(basket5_tot$Cases_Per_K, xlab="Cases Per 1000", main="Cases/K Among Counties With Pop>1M", col="slategray")
+sd(basket1_tot$Cases_Per_K)
+sd(basket2_tot$Cases_Per_K)
+sd(basket3_tot$Cases_Per_K)
+sd(basket4_tot$Cases_Per_K)
+sd(basket5_tot$Cases_Per_K)
+
+```
+
+
+### Cross-validation 
+```{r, echo=T}
+dev_by_train_1 <- rep(0,100)
+dev_by_test_1 <- rep(0,100)
+dev_by_train_2 <- rep(0,100)
+dev_by_test_2 <- rep(0,100)
+dev_by_train_3 <- rep(0,100)
+dev_by_test_3 <- rep(0,100)
+dev_by_train_4 <- rep(0,100)
+dev_by_test_4 <- rep(0,100)
+dev_by_train_5 <- rep(0,100)
+dev_by_test_5 <- rep(0,100)
+for(iter in 1:100){
+  b1 <- sample(basket1)
+  b2 <- sample(basket2)
+  b3 <- sample(basket3)
+  b4 <- sample(basket4)
+  b5 <- sample(basket5)
+  b1_test <- b1[1:floor(length(b1)/2)]
+  b1_train <- b1[(length(b1_test)+1):length(b1)]
+  b2_test <- b2[1:floor(length(b2)/2)]
+  b2_train <- b2[(length(b2_test)+1):length(b2)]
+  b3_test <- b3[1:floor(length(b3)/2)]
+  b3_train <- b3[(length(b3_test)+1):length(b3)]
+  b4_test <- b4[1:floor(length(b4)/2)]
+  b4_train <- b4[(length(b4_test)+1):length(b4)]
+  b5_test <- b5[1:floor(length(b5)/2)]
+  b5_train <- b5[(length(b5_test)+1):length(b5)]
+  mts <- matrix(0,10000,3)
+  theta <- matrix(0,10000,5)
+  datalist <- list(b1_train, b2_train,
+                 b3_train, b4_train, b5_train)
+  ybar <- rep(0,5)
+  n_vec <- rep(0,5)
+  for(i in 1:5){
+   ybar[i] <- mean(datalist[[i]])
+   n_vec[i] <- length(datalist[[i]])}
+  n_ov <- sum(n_vec)
+  theta[1,] <- ybar
+  mts[1,] <- c(mu0,tau2_0, sigma2_0)
+  for(i in 2:10000){
+    for(j in 1:5){
+      theta[i,j] <- rnorm(1,
+                          ((n_vec[j]*ybar[j]/mts[i-1,3])
+                           +(1/mts[i-1,2]))/
+                           ((n_vec[j]/mts[i-1,3])+ 
+                              (1/mts[i-1,2])),
+                          sqrt(1/((n_vec[j]/mts[i-1,3])+(1/mts[i-1,2]))))
+    }
+    mts[i,1] <- rnorm(1,
+                    ((m*mean(theta[i-1,])/mts[i-1,2]) + mu0/gamma2_0)/
+                      ((m/mts[i-1,2])+ (1/gamma2_0)),
+                    sqrt(1/(
+                      (m/mts[i-1,2]) + (1/gamma2_0))))
+     mts[i,2] <- 1/rgamma(1,
+                       (nu_0 + m)/2,
+                       rate=0.5*(nu_0*tau2_0 + carp(theta[i-1,],mts[i-1,1]))
+                        )
+   carpsum <- 0
+   for(k in 1:5){
+     carpsum = carpsum + carp(datalist[[k]],theta[i-1,k])
+   }
+    mts[i,3] <- 1/rgamma(1,
+                       0.5*(v_0 + n_ov),
+                       rate = 0.5*(v_0*sigma2_0 + carpsum))
+  }
+  thet_mean_1 <- mean(theta[3000:10000, 1])
+  thet_mean_2 <- mean(theta[3000:10000, 2])
+  thet_mean_3 <- mean(theta[3000:10000, 3])
+  thet_mean_4 <- mean(theta[3000:10000, 4])
+  thet_mean_5 <- mean(theta[3000:10000, 5])
+  dev_by_train_1[iter] <- abs(mean(b1_train)-thet_mean_1)
+  dev_by_test_1[iter] <- abs(mean(b1_test)-thet_mean_1)
+  dev_by_train_2[iter] <- abs(mean(b2_train)-thet_mean_2)
+  dev_by_test_2[iter] <- abs(mean(b2_test)-thet_mean_2)
+  dev_by_train_3[iter] <- abs(mean(b3_train)-thet_mean_3)
+  dev_by_test_3[iter] <- abs(mean(b3_test)-thet_mean_3)
+  dev_by_train_4[iter] <- abs(mean(b4_train)-thet_mean_4)
+  dev_by_test_4[iter] <- abs(mean(b4_test)-thet_mean_4)
+  dev_by_train_5[iter] <- abs(mean(b5_train)-thet_mean_5)
+  dev_by_test_5[iter] <- abs(mean(b5_test)-thet_mean_5)
+  print(iter)
+}
+
+mean(dev_by_train_1)
+mean(dev_by_test_1)
+mean(dev_by_train_2)
+mean(dev_by_test_2)
+mean(dev_by_train_3)
+mean(dev_by_test_3)
+mean(dev_by_train_4)
+mean(dev_by_test_4)
+mean(dev_by_train_5)
+mean(dev_by_test_5)
+
+hist(dev_by_train_1, xlab="Avg Error", main="Avg Error w/in Training: Basket 1", col = "bisque")
+hist(dev_by_test_1, xlab="Avg Error", main="Avg Error w/in Testing: Basket 1", col="paleturquoise")
+hist(dev_by_train_2, xlab="Avg Error", main="Avg Error w/in Training: Basket 2", col = "bisque")
+hist(dev_by_test_2, xlab="Avg Error", main="Avg Error w/in Testing: Basket 2", col="paleturquoise")
+hist(dev_by_train_3, xlab="Avg Error", main="Avg Error w/in Training: Basket 3", col = "bisque")
+hist(dev_by_test_3, xlab="Avg Error", main="Avg Error w/in Testing: Basket 3", col="paleturquoise")
+hist(dev_by_train_4, xlab="Avg Error", main="Avg Error w/in Training: Basket 4", col = "bisque")
+hist(dev_by_test_4, xlab="Avg Error", main="Avg Error w/in Testing: Basket 4", col="paleturquoise")
+hist(dev_by_train_5, xlab="Avg Error", main="Avg Error w/in Training: Basket 5", col = "bisque")
+hist(dev_by_test_5, xlab="Avg Error", main="Avg Error w/in Testing: Basket 5", col="paleturquoise")
+```
+
+### Sensitivity analysis
+
+```{r, echo=T}
+
+mat_w_sol_2 <- mat_w_sol
+mu_vec <- c(50,100,150,200,250)
+tau_vec <- c(650,1000,1350,1700,2050)
+sig_vec <- c(550,650,750,850,950)
+v_0 <- 2
+nu_0 <- 2
+gamma2_0 <- 20
+m <- 5
+datalist <- list(basket1, basket2,
+                 basket3, basket4, basket5)
+ybar <- rep(0,5)
+n_vec <- rep(0,5)
+for(i in 1:5){
+  ybar[i] <- mean(datalist[[i]])
+  n_vec[i] <- length(datalist[[i]])
+}
+n_ov <- length(hier$Cases_Per_K)
+carp<- function(vec1, thetval){
+  return(sum((vec1-thetval)^2))
+}
+
+
+mat_w_sol <- matrix(0,125,10)
+count=0
+for(a in 1:5){
+  for(b in 1:5){
+    for(c in 1:5){
+      mu_est <- mu_vec[a]
+      tau_est <- tau_vec[b]
+      sig_est <- sig_vec[c]
+      count=count+1
+
+mu0 <- mu_est
+tau2_0 <- tau_est
+sigma2_0 <- sig_est
+
+#matrix with mu, tau, sigma vals
+
+
+mts <- matrix(0,10000,3)
+#matrix with theta vals
+theta <- matrix(0,10000,5)
+
+#couldn't think of a good descriptive name 
+#not already in use for a built in capability
+#therefore carp
+
+theta[1,] <- ybar
+mts[1,] <- c(mu0,tau2_0, sigma2_0)
+for(i in 2:10000){
+  for(j in 1:5){
+    theta[i,j] <- rnorm(1,
+                        ((n_vec[j]*ybar[j]/mts[i-1,3])
+                         +(1/mts[i-1,2]))/
+                          ((n_vec[j]/mts[i-1,3])+ 
+                             (1/mts[i-1,2])),
+                        sqrt(1/((n_vec[j]/mts[i-1,3])+(1/mts[i-1,2]))))
+  }
+  mts[i,1] <- rnorm(1,
+                    ((m*mean(theta[i-1,])/mts[i-1,2]) + mu0/gamma2_0)/
+                      ((m/mts[i-1,2])+ (1/gamma2_0)),
+                    sqrt(1/(
+                      (m/mts[i-1,2]) + (1/gamma2_0))))
+  mts[i,2] <- 1/rgamma(1,
+                       (nu_0 + m)/2,
+                       rate=0.5*(nu_0*tau2_0 + carp(theta[i-1,],mts[i-1,1]))
+                        )
+  carpsum <- 0
+  for(k in 1:5){
+    carpsum = carpsum + carp(datalist[[k]],theta[i-1,k])
+  }
+  mts[i,3] <- 1/rgamma(1,
+                       0.5*(v_0 + n_ov),
+                       rate = 0.5*(v_0*sigma2_0 + carpsum))
+}
+
+mat_w_sol[count,1] <- mu_est
+mat_w_sol[count,2] <- tau_est
+mat_w_sol[count,3] <- sig_est
+#Tau estimate
+mat_w_sol[count,4] <- mean(mts[3000:10000,2 ])
+#Sigma estimate
+mat_w_sol[count,5] <- mean(mts[3000:10000,3 ])
+#Theta estimate
+mat_w_sol[count,6] <- mean(theta[3000:10000,1 ])      
+mat_w_sol[count,7] <- mean(theta[3000:10000,2 ])      
+mat_w_sol[count,8] <- mean(theta[3000:10000,3 ])      
+mat_w_sol[count,9] <- mean(theta[3000:10000,4 ])      
+mat_w_sol[count,10] <- mean(theta[3000:10000,5 ])      
+print(count)
+      
+    }
+  }
+}
+
+
+
+
+```
+
+
+### Rolling avg of new cases for vaxx regression
+
+```{r, echo=T}
+library(stringr)
+new_cases <- read.csv("us-counties-2021.csv")
+nc_filt <- filter(new_cases, date=="2021-06-12")
+cvax <- read.csv("countyvax.csv")
+cv_filt <- filter(cvax, Date=="12/07/2021")
+cv_non <- filter(cv_filt, Recip_County %in% nc_filt$county)
+cv_yes <- filter(cv_filt, !(Recip_County %in% nc_filt$county))
+cv_yes %>% mutate(Recip_County = word(Recip_County , 1  , -2)) -> cv_yes
+nrow(cv_non)
+nrow(cv_yes)
+nrow(cv_filt)
+cv_yes_filt <- filter(cv_yes, Recip_County %in% nc_filt$county)
+combined_data <- rbind(cv_non, cv_yes_filt)
+nc_filt$state_abb <- setNames(
+  state.abb, state.name)[as.vector(nc_filt$state)]
+joined_data <- inner_join(combined_data, nc_filt, by=c("Recip_County"="county", "Recip_State"="state_abb"))
+
+
+
+```
+
+
+
+```{r,echo=T}
+mat_w_sol_tb <- as.data.frame(mat_w_sol)
+sapply(mat_w_sol_tb, min)
+sapply(mat_w_sol_tb, max)
+
+```
+
+
